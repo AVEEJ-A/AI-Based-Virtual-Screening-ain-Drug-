@@ -1,6 +1,15 @@
 import { GoogleGenAI, Type } from "@google/genai";
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
+// Safe access to environment variables in both browser and node
+const getApiKey = () => {
+  try {
+    return process.env.GEMINI_API_KEY || "";
+  } catch (e) {
+    return "";
+  }
+};
+
+const ai = new GoogleGenAI({ apiKey: getApiKey() });
 
 export interface Molecule {
   id?: number;
