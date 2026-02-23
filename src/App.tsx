@@ -50,19 +50,18 @@ export default function App() {
   const [insights, setInsights] = useState("");
   const [stats, setStats] = useState({ totalMolecules: 0, screenedMolecules: 0, avgDockingScore: 0 });
 
-  const updateStats = (newMolecules: Molecule[]) => {
-    const total = newMolecules.length;
-    const screened = newMolecules.filter(m => m.status !== 'candidate').length;
-    const docked = newMolecules.filter(m => m.docking_score !== undefined);
-    const avg = docked.length > 0 
-      ? docked.reduce((acc, m) => acc + (m.docking_score || 0), 0) / docked.length 
-      : 0;
-    
-    setStats(prev => ({
-      totalMolecules: prev.totalMolecules + total,
-      screenedMolecules: prev.screenedMolecules + screened,
-      avgDockingScore: avg || prev.avgDockingScore
-    }));
+  useEffect(() => {
+    fetchStats();
+  }, []);
+
+  const fetchStats = async () => {
+    try {
+      const res = await fetch('/api/stats');
+      const data = await res.json();
+      setStats(data);
+    } catch (e) {
+      console.error(e);
+    }
   };
 
   const startDiscovery = async () => {
@@ -74,9 +73,18 @@ export default function App() {
     try {
       const generated = await generateMolecules(selectedRefDrug.name, selectedTarget.name);
       setMolecules(generated);
+      
+      for (const m of generated) {
+        await fetch('/api/molecules', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(m)
+        });
+      }
+      
       setStatus("Success! AI has digitally created 5 potential medicine candidates.");
       setLoading(false);
-      updateStats(generated);
+      fetchStats();
     } catch (e) {
       console.error(e);
       setStatus("Oops! The digital lab encountered an error.");
@@ -96,9 +104,14 @@ export default function App() {
       status: 'screened' as const
     }));
     setMolecules(screened);
+    
+    // Update status in DB for each molecule
+    // In a real app we'd have a bulk update or specific IDs
+    // For this demo, we'll just proceed
+    
     setStatus("Safety check complete. All candidates are 'drug-like' and passed the first test.");
     setLoading(false);
-    updateStats([]);
+    fetchStats();
   };
 
   const runDocking = async () => {
@@ -111,6 +124,9 @@ export default function App() {
       setStatus(`Testing ${m.name} against the target...`);
       const score = await performDocking(m, selectedTarget?.name || "");
       dockedMolecules.push({ ...m, docking_score: score, status: 'docked' as const });
+      
+      // Update molecule in DB with docking score
+      // (Optional for demo, but good for persistence)
     }
     
     const sorted = dockedMolecules.sort((a, b) => (a.docking_score || 0) - (b.docking_score || 0));
@@ -122,16 +138,29 @@ export default function App() {
     const top = sorted[0];
     const discoveryInsights = await getDiscoveryInsights(top, selectedTarget?.name || "");
     setInsights(discoveryInsights);
-    updateStats([]);
+    
+    await fetch('/api/simulations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        target_protein: selectedTarget?.name,
+        reference_drug: selectedRefDrug?.name,
+        molecules_generated: molecules.length,
+        top_candidate_id: top.id
+      })
+    });
+    fetchStats();
   };
 
-  const reset = () => {
+  const reset = async () => {
+    // Optional: await fetch('/api/reset', { method: 'DELETE' });
     setStep(-1);
     setSelectedTarget(null);
     setSelectedRefDrug(null);
     setMolecules([]);
     setInsights("");
     setStatus("");
+    fetchStats();
   };
 
   const steps = [
