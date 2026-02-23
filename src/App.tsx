@@ -35,6 +35,8 @@ import {
 } from 'recharts';
 import Markdown from 'react-markdown';
 import { MoleculeViewer } from './components/MoleculeViewer';
+import { StructureComparison } from './components/StructureComparison';
+import { ChemicalSpaceMap } from './components/ChemicalSpaceMap';
 import { generateMolecules, performDocking, getDiscoveryInsights, Molecule } from './services/geminiService';
 import { TARGETS, REFERENCE_DRUGS, DiscoveryTarget, ReferenceDrug } from './constants';
 
@@ -48,18 +50,19 @@ export default function App() {
   const [insights, setInsights] = useState("");
   const [stats, setStats] = useState({ totalMolecules: 0, screenedMolecules: 0, avgDockingScore: 0 });
 
-  useEffect(() => {
-    fetchStats();
-  }, []);
-
-  const fetchStats = async () => {
-    try {
-      const res = await fetch('/api/stats');
-      const data = await res.json();
-      setStats(data);
-    } catch (e) {
-      console.error(e);
-    }
+  const updateStats = (newMolecules: Molecule[]) => {
+    const total = newMolecules.length;
+    const screened = newMolecules.filter(m => m.status !== 'candidate').length;
+    const docked = newMolecules.filter(m => m.docking_score !== undefined);
+    const avg = docked.length > 0 
+      ? docked.reduce((acc, m) => acc + (m.docking_score || 0), 0) / docked.length 
+      : 0;
+    
+    setStats(prev => ({
+      totalMolecules: prev.totalMolecules + total,
+      screenedMolecules: prev.screenedMolecules + screened,
+      avgDockingScore: avg || prev.avgDockingScore
+    }));
   };
 
   const startDiscovery = async () => {
@@ -71,18 +74,9 @@ export default function App() {
     try {
       const generated = await generateMolecules(selectedRefDrug.name, selectedTarget.name);
       setMolecules(generated);
-      
-      for (const m of generated) {
-        await fetch('/api/molecules', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(m)
-        });
-      }
-      
       setStatus("Success! AI has digitally created 5 potential medicine candidates.");
       setLoading(false);
-      fetchStats();
+      updateStats(generated);
     } catch (e) {
       console.error(e);
       setStatus("Oops! The digital lab encountered an error.");
@@ -104,6 +98,7 @@ export default function App() {
     setMolecules(screened);
     setStatus("Safety check complete. All candidates are 'drug-like' and passed the first test.");
     setLoading(false);
+    updateStats([]);
   };
 
   const runDocking = async () => {
@@ -127,28 +122,16 @@ export default function App() {
     const top = sorted[0];
     const discoveryInsights = await getDiscoveryInsights(top, selectedTarget?.name || "");
     setInsights(discoveryInsights);
-    
-    await fetch('/api/simulations', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        target_protein: selectedTarget?.name,
-        reference_drug: selectedRefDrug?.name,
-        molecules_generated: molecules.length,
-        top_candidate_id: top.id
-      })
-    });
-    fetchStats();
+    updateStats([]);
   };
 
-  const reset = async () => {
+  const reset = () => {
     setStep(-1);
     setSelectedTarget(null);
     setSelectedRefDrug(null);
     setMolecules([]);
     setInsights("");
     setStatus("");
-    fetchStats();
   };
 
   const steps = [
@@ -395,6 +378,16 @@ export default function App() {
                           <div className="text-[10px] uppercase tracking-widest text-zinc-500">Model Loaded</div>
                         </div>
                       </div>
+                      
+                      <div className="mt-8">
+                        <StructureComparison 
+                          targetName={selectedTarget?.commonName || ""} 
+                          drugName={selectedRefDrug?.name || ""} 
+                        />
+                        <p className="mt-4 text-[11px] text-zinc-500 italic">
+                          Diagram: The AI analyzes how the reference drug interacts with the target protein to learn the 'Lock and Key' pattern.
+                        </p>
+                      </div>
                     </motion.div>
                   ) : (
                     <motion.div 
@@ -403,6 +396,15 @@ export default function App() {
                       className="space-y-8"
                     >
                       {/* Candidates Grid */}
+                      {step === 1 && (
+                        <div className="mb-8">
+                          <ChemicalSpaceMap molecules={molecules} />
+                          <p className="mt-4 text-[11px] text-zinc-500 italic text-center">
+                            Diagram: The AI is searching through millions of possible chemical combinations to find those that resemble a medicine.
+                          </p>
+                        </div>
+                      )}
+                      
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         {molecules.map((m, i) => (
                           <motion.div 
@@ -459,43 +461,57 @@ export default function App() {
                         <motion.div 
                           initial={{ opacity: 0, y: 20 }}
                           animate={{ opacity: 1, y: 0 }}
-                          className="grid grid-cols-1 lg:grid-cols-2 gap-6"
+                          className="space-y-6"
                         >
-                          <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-6">
-                            <h3 className="text-xs font-bold text-white uppercase tracking-widest mb-6">Molecular Profile: {molecules[0].name}</h3>
-                            <div className="h-64">
-                              <ResponsiveContainer width="100%" height="100%">
-                                <RadarChart cx="50%" cy="50%" outerRadius="80%" data={[
-                                  { subject: 'Size', A: molecules[0].molecular_weight / 5, fullMark: 100 },
-                                  { subject: 'Solubility', A: (molecules[0].logp + 5) * 10, fullMark: 100 },
-                                  { subject: 'Donors', A: molecules[0].h_bond_donors * 20, fullMark: 100 },
-                                  { subject: 'Acceptors', A: molecules[0].h_bond_acceptors * 10, fullMark: 100 },
-                                  { subject: 'Safety', A: molecules[0].admet_score * 100, fullMark: 100 },
-                                ]}>
-                                  <PolarGrid stroke="#27272a" />
-                                  <PolarAngleAxis dataKey="subject" tick={{ fill: '#71717a', fontSize: 10 }} />
-                                  <Radar name="Candidate" dataKey="A" stroke="#10b981" fill="#10b981" fillOpacity={0.3} />
-                                </RadarChart>
-                              </ResponsiveContainer>
+                          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                            <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-6">
+                              <h3 className="text-xs font-bold text-white uppercase tracking-widest mb-6">Molecular Profile: {molecules[0].name}</h3>
+                              <div className="h-64">
+                                <ResponsiveContainer width="100%" height="100%">
+                                  <RadarChart cx="50%" cy="50%" outerRadius="80%" data={[
+                                    { subject: 'Size', A: molecules[0].molecular_weight / 5, fullMark: 100 },
+                                    { subject: 'Solubility', A: (molecules[0].logp + 5) * 10, fullMark: 100 },
+                                    { subject: 'Donors', A: molecules[0].h_bond_donors * 20, fullMark: 100 },
+                                    { subject: 'Acceptors', A: molecules[0].h_bond_acceptors * 10, fullMark: 100 },
+                                    { subject: 'Safety', A: molecules[0].admet_score * 100, fullMark: 100 },
+                                  ]}>
+                                    <PolarGrid stroke="#27272a" />
+                                    <PolarAngleAxis dataKey="subject" tick={{ fill: '#71717a', fontSize: 10 }} />
+                                    <Radar name="Candidate" dataKey="A" stroke="#10b981" fill="#10b981" fillOpacity={0.3} />
+                                  </RadarChart>
+                                </ResponsiveContainer>
+                              </div>
+                            </div>
+
+                            <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-6">
+                              <h3 className="text-xs font-bold text-white uppercase tracking-widest mb-4">AI Discovery Report</h3>
+                              <div className="prose prose-invert prose-sm max-w-none">
+                                <div className="text-zinc-400 text-xs leading-relaxed">
+                                  <Markdown>{insights || "Finalizing report..."}</Markdown>
+                                </div>
+                              </div>
+                              <div className="mt-6 pt-6 border-t border-zinc-800 flex items-center gap-4">
+                                <div className="w-10 h-10 rounded-full bg-emerald-500/10 flex items-center justify-center">
+                                  <CheckCircle2 className="w-5 h-5 text-emerald-500" />
+                                </div>
+                                <div>
+                                  <p className="text-[10px] text-zinc-500 uppercase font-bold">Final Verdict</p>
+                                  <p className="text-xs text-white">High potential for {selectedTarget?.commonName}.</p>
+                                </div>
+                              </div>
                             </div>
                           </div>
 
-                          <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-6">
-                            <h3 className="text-xs font-bold text-white uppercase tracking-widest mb-4">AI Discovery Report</h3>
-                            <div className="prose prose-invert prose-sm max-w-none">
-                              <div className="text-zinc-400 text-xs leading-relaxed">
-                                <Markdown>{insights || "Finalizing report..."}</Markdown>
-                              </div>
-                            </div>
-                            <div className="mt-6 pt-6 border-t border-zinc-800 flex items-center gap-4">
-                              <div className="w-10 h-10 rounded-full bg-emerald-500/10 flex items-center justify-center">
-                                <CheckCircle2 className="w-5 h-5 text-emerald-500" />
-                              </div>
-                              <div>
-                                <p className="text-[10px] text-zinc-500 uppercase font-bold">Final Verdict</p>
-                                <p className="text-xs text-white">High potential for {selectedTarget?.commonName}.</p>
-                              </div>
-                            </div>
+                          <div className="bg-zinc-900/50 border border-zinc-800 rounded-3xl p-8">
+                            <h3 className="text-xs font-bold text-white uppercase tracking-widest mb-6 text-center">Final Binding Simulation: {molecules[0].name}</h3>
+                            <StructureComparison 
+                              targetName={selectedTarget?.commonName || ""} 
+                              drugName={molecules[0].name} 
+                              isDocked={true}
+                            />
+                            <p className="mt-4 text-[11px] text-zinc-500 italic text-center">
+                              Diagram: This visualization shows the lead candidate molecule successfully binding into the target protein's active site pocket.
+                            </p>
                           </div>
                         </motion.div>
                       )}
